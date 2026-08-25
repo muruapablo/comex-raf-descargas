@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Administración de Descargas RAF - COMEX Stellantis</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <!-- Babel Standalone -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Inter & JetBrains Mono Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col justify-between antialiased selection:bg-blue-100 selection:text-blue-900">
+  <div id="root"></div>
+
+  <script type="text/babel">
+
+    const LogoComexSvg = () => (
+      <svg className="h-10 w-auto" viewBox="0 0 520 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g stroke="#003366" strokeWidth="3" strokeLinejoin="round">
+          <path d="M 40,80 L 80,60 L 120,80 L 80,100 Z" fill="#1e293b" />
+          <path d="M 40,80 L 40,110 L 80,130 L 80,100 Z" fill="#0f172a" />
+          <path d="M 80,100 L 80,130 L 120,110 L 120,80 Z" fill="#334155" />
+          <path d="M 40,50 L 80,30 L 120,50 L 80,70 Z" fill="#38bdf8" />
+          <path d="M 40,50 L 40,80 L 80,100 L 80,70 Z" fill="#0284c7" />
+          <path d="M 80,70 L 80,100 L 120,80 L 120,50 Z" fill="#0369a1" />
+        </g>
+        <ellipse cx="80" cy="80" rx="65" ry="32" fill="none" stroke="#0284c7" strokeWidth="3.5" strokeDasharray="6 4" transform="rotate(-15 80 80)" />
+        <circle cx="132" cy="55" r="9" fill="#0284c7" />
+        <text x="165" y="85" fill="#0f172a" fontSize="52" fontWeight="800" fontFamily="Inter, sans-serif" letterSpacing="2">COMEX</text>
+        <text x="168" y="115" fill="#475569" fontSize="18" fontWeight="600" fontFamily="Inter, sans-serif" letterSpacing="4">COMERCIO EXTERIOR</text>
+      </svg>
+    );
+
+    const LogoStellantisSvg = () => (
+      <svg className="h-6 w-auto" viewBox="0 0 400 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <text x="10" y="42" fill="#FFFFFF" fontSize="32" fontWeight="700" fontFamily="Inter, sans-serif" letterSpacing="6">STELL</text>
+        <g transform="translate(195, 26)">
+          <circle cx="0" cy="0" r="16" fill="none" stroke="#FFFFFF" strokeWidth="1.5" strokeDasharray="2 3" />
+          <circle cx="0" cy="0" r="10" fill="none" stroke="#FFFFFF" strokeWidth="1.5" strokeDasharray="2 2" />
+          <circle cx="0" cy="0" r="4" fill="#FFFFFF" />
+        </g>
+        <text x="220" y="42" fill="#FFFFFF" fontSize="32" fontWeight="700" fontFamily="Inter, sans-serif" letterSpacing="6">NTIS</text>
+      </svg>
+    );
+
+    const CATALOGO_ESTADOS = {
+      'V': { name: 'Vacio', color: 'bg-slate-100 text-slate-700 border-slate-300', tooltip: 'Vacío / Placeholder inicial. Listo para solicitar descarga a demanda.' },
+      'E': { name: 'PendienteEstructura', color: 'bg-slate-200 text-slate-800 border-slate-400', tooltip: 'Solicitud encolada en FIFO. El Worker solicitará los componentes a Oracle DW9818.' },
+      'L': { name: 'EstructuraSolicitada', color: 'bg-blue-100 text-blue-800 border-blue-300', tooltip: 'Solicitud enviada a Oracle DW9818; esperando confirmación de componentes.' },
+      'G': { name: 'EstructuraGenerada', color: 'bg-indigo-100 text-indigo-800 border-indigo-300', tooltip: 'Estructura consolidada. El operador puede procesar (G → D) para encolar la descarga.' },
+      'D': { name: 'PendienteDescarga', color: 'bg-sky-100 text-sky-800 border-sky-300', tooltip: 'Documento en cola FIFO para descarga automática de saldos.' },
+      'P': { name: 'EnProceso', color: 'bg-amber-100 text-amber-900 border-amber-400 animate-pulse', tooltip: 'Worker FIFO descargando saldos en segundo plano. Operaciones destructivas bloqueadas temporalmente.' },
+      'T': { name: 'Terminada', color: 'bg-emerald-100 text-emerald-800 border-emerald-300', tooltip: 'Descarga completada con éxito. Acciones disponibles: Reprocesar, Reenviar SIDOM, Reenvío AVG.' },
+      'Q': { name: 'PendienteAnulacion', color: 'bg-amber-100 text-amber-900 border-amber-400 animate-pulse', tooltip: 'Anulación en curso en Worker FIFO. Invoca SP PA_COMEX_DescargaSaldos_AnularDescarga.' },
+      'A': { name: 'Anulada', color: 'bg-rose-100 text-rose-800 border-rose-300', tooltip: 'Anulada y saldos revertidos. Se puede crear una nueva descarga desde la pestaña Anuladas.' },
+      'O': { name: 'Oficializada', color: 'bg-purple-100 text-purple-800 border-purple-300', tooltip: 'Documento oficializado: información cerrada, no se puede anular ni modificar.' }
+    };
+
+    const CATALOGO_REPOSTOCK = {
+      'D': { name: 'PendienteDescarga', color: 'bg-blue-100 text-blue-800 border-blue-300', tooltip: 'Pendiente de descargar reposición de stock' },
+      'T': { name: 'Terminada', color: 'bg-emerald-100 text-emerald-800 border-emerald-300', tooltip: 'Reposición descargada y stock actualizado' },
+      'S': { name: 'PendienteSaldo', color: 'bg-orange-100 text-orange-800 border-orange-300', tooltip: 'Saldo insuficiente para reponer stock' },
+      'Q': { name: 'PendienteAnulacion', color: 'bg-amber-100 text-amber-800 border-amber-300', tooltip: 'Marcada para anulación de reposición' },
+      'A': { name: 'Anulada', color: 'bg-rose-100 text-rose-800 border-rose-300', tooltip: 'Reposición de stock anulada' }
+    };
+
+    const PIPELINE_DESCARGA = [
+      { code: 'E', name: 'Pendiente Estructura', desc: 'Solicitud registrada en cola FIFO' },
+      { code: 'L', name: 'Estructura Solicitada', desc: 'Consulta remitos en Oracle DW9818' },
+      { code: 'G', name: 'Estructura Generada', desc: 'Componentes y precios consolidados' },
+      { code: 'D', name: 'Pendiente Descarga', desc: 'Listo para descarga de saldos' },
+      { code: 'P', name: 'En Proceso (FIFO)', desc: 'Worker descargando saldos y mermas' },
+      { code: 'T', name: 'Terminada', desc: 'Saldos afectados y verificados OK' }
+    ];
+
+    const PIPELINE_ANULACION = [
+      { code: 'Q', name: 'Pendiente Anulación', desc: 'Registro <100ms en BD + Encolado FIFO' },
+      { code: 'A', name: 'Anulada', desc: 'Ejecutado SP PA_COMEX_DescargaSaldos_AnularDescarga' }
+    ];
+
+    const MOCK_DOCUMENTOS = [
+      { id: 1, documento: 'E-0255-00000014', fecha: '14/08/2026', estado: 'T', porcentaje: '98.50%', sidom: '18/08/2026', modelo: 'CRONOS 1.3 / DUCATO', informadoAVG: 'S', tieneSaldosCO: true, estadoRepoStock: 'T' },
+      { id: 2, documento: 'E-0132-00012878', fecha: '12/08/2026', estado: 'T', porcentaje: '87.73%', sidom: '15/08/2026', modelo: 'JEEP RENEGADE 1.8', informadoAVG: 'N', tieneSaldosCO: true, hasWarningAutorizacion: true, estadoRepoStock: 'T' },
+      { id: 3, documento: 'E-0132-00012861', fecha: '10/08/2026', estado: 'Q', porcentaje: '67.20%', sidom: '—', modelo: 'FIAT TORO / COMPASS', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'Q' },
+      { id: 4, documento: 'L-0001-00045120', fecha: '11/08/2026', estado: 'P', porcentaje: '45.10%', sidom: '—', modelo: 'RAM 1500 V8', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'D' },
+      { id: 5, documento: 'E-0100-00005511', fecha: '09/08/2026', estado: 'D', porcentaje: '0.00%', sidom: '—', modelo: 'PEUGEOT 208 GT', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'D' },
+      { id: 6, documento: 'L-0002-00088123', fecha: '08/08/2026', estado: 'G', porcentaje: '0.00%', sidom: '—', modelo: 'CITROEN C3 AIRCROSS', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'D' },
+      { id: 7, documento: 'E-0255-00000099', fecha: '07/08/2026', estado: 'E', porcentaje: '0.00%', sidom: '—', modelo: 'FIAT STRADA VOLCANO', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'D' },
+      { id: 8, documento: '2026017TLR1000444T', fecha: '05/08/2026', estado: 'T', porcentaje: '100.00%', sidom: '06/08/2026', modelo: 'COMPASS 1.3 T270', documentoAduanero: '26017IC04001234', informadoAVG: 'S', tieneSaldosCO: false, estadoRepoStock: 'T' },
+      { id: 9, documento: 'F-0098-00004122', fecha: '02/08/2026', estado: 'A', porcentaje: '100.00%', sidom: '03/08/2026', modelo: 'FIAT PULSE IMPULSE', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'A' },
+      { id: 10, documento: 'V-0000-00000000', fecha: '01/08/2026', estado: 'V', porcentaje: '0.00%', sidom: '—', modelo: 'SIN MODELO ASIGNADO', informadoAVG: 'N', tieneSaldosCO: false, estadoRepoStock: 'D' }
+    ];
+
+    const ComponentePipelineTracker = ({ doc, onClose }) => {
+      if (!doc) return null;
+      const isAnulacion = doc.estado === 'Q' || doc.estado === 'A';
+      const steps = isAnulacion ? PIPELINE_ANULACION : PIPELINE_DESCARGA;
+      
+      const getStepIndex = (code) => {
+        if (isAnulacion) {
+          if (code === 'Q') return 0;
+          if (code === 'A') return 1;
+          return 0;
+        } else {
+          const idx = PIPELINE_DESCARGA.findIndex(s => s.code === code);
+          return idx !== -1 ? idx : 0;
+        }
+      };
+
+      const currentIdx = getStepIndex(doc.estado);
+
+      return (
+        <div className="bg-slate-900 text-white p-5 rounded-xl border border-slate-700 shadow-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2">
+              <span className="p-1.5 bg-blue-600 rounded text-xs font-mono font-bold">FIFO PIPELINE</span>
+              <h3 className="font-bold text-sm font-mono text-white">{doc.documento}</h3>
+            </div>
+            {onClose && (
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-xs font-bold">✕ Cerrar</button>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-300">
+            {isAnulacion ? 'Secuencia de Reversión Asincrónica (Anulación):' : 'Pipeline Gradual de Descarga en Segundo Plano:'}
+          </p>
+
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 pt-2">
+            {steps.map((step, idx) => {
+              const isPassed = idx < currentIdx;
+              const isCurrent = idx === currentIdx;
+
+              return (
+                <div 
+                  key={step.code}
+                  className={`p-3 rounded-lg border text-center transition-all ${
+                    isCurrent 
+                      ? 'bg-blue-900/80 border-sky-400 text-white shadow-lg shadow-sky-500/20 ring-2 ring-sky-400/50' 
+                      : isPassed 
+                      ? 'bg-emerald-950/60 border-emerald-600/80 text-emerald-200' 
+                      : 'bg-slate-800/50 border-slate-700 text-slate-500'
+                  }`}
+                >
+                  <div className="flex items-center justify-center space-x-1 mb-1">
+                    <span className="font-mono text-xs font-bold px-1.5 py-0.5 rounded bg-black/40">
+                      {step.code}
+                    </span>
+                    {isCurrent && <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>}
+                    {isPassed && <span className="text-emerald-400 font-bold">✓</span>}
+                  </div>
+                  <div className="font-bold text-[11px] truncate">{step.name}</div>
+                  <div className="text-[9px] text-slate-400 mt-1 leading-tight">{step.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 font-mono">
+            <span>Estado Actual en BD: <strong className="text-amber-400">'{doc.estado}'</strong></span>
+            <span>Acción Origen: <strong className="text-sky-300">A Demanda (Usuario)</strong></span>
+            <span>Canal: <strong className="text-emerald-400">System.Threading.Channels</strong></span>
+          </div>
+        </div>
+      );
+    };
+
+    function App() {
+      const [documentos, setDocumentos] = React.useState(MOCK_DOCUMENTOS);
+      const [tabActiva, setTabActiva] = React.useState('principal');
+      const [filtrosVisibles, setFiltrosVisibles] = React.useState(true);
+      const [openMenuId, setOpenMenuId] = React.useState(null);
+      const [toastMessage, setToastMessage] = React.useState(null);
+      const [docTracker, setDocTracker] = React.useState(null);
+
+      // Modales
+      const [modalAnular, setModalAnular] = React.useState(null);
+      const [modalParametrizaciones, setModalParametrizaciones] = React.useState(null);
+      const [modalEstructuras, setModalEstructuras] = React.useState(null);
+      const [modalReemplazar, setModalReemplazar] = React.useState(null);
+      const [vistaSaldosCO, setVistaSaldosCO] = React.useState(null);
+
+      // Filtros
+      const [filtroTipo, setFiltroTipo] = React.useState('V');
+      const [filtroFactura, setFiltroFactura] = React.useState('');
+      const [filtroEstado, setFiltroEstado] = React.useState('');
+      const [sugerenciasFactura, setSugerenciasFactura] = React.useState([]);
+
+      // Logs y Cola FIFO
+      const [fifoLogs, setFifoLogs] = React.useState([
+        { time: '20:58:01', msg: '[Api.RAF FIFO] Servicio en segundo plano iniciado. Canal System.Threading.Channels listo.', type: 'info' },
+        { time: '20:58:10', msg: '[Api.RAF FIFO] [Operador: p.perez] Solicitud encolada para E-0132-00012861 (Operación: ANULAR).', type: 'warn' },
+        { time: '20:58:12', msg: '[Api.RAF FIFO] Ejecutando SP PA_COMEX_DescargaSaldos_AnularDescarga...', type: 'sys' },
+        { time: '20:58:15', msg: '[Api.RAF FIFO] Anulación completada para E-0132-00012861. Estado actualizado a A (Anulada).', type: 'success' }
+      ]);
+
+      const showToast = (msg) => {
+        setToastMessage(msg);
+        setTimeout(() => setToastMessage(null), 5000);
+      };
+
+      // Simulación de Worker FIFO en segundo plano
+      React.useEffect(() => {
+        const interval = setInterval(() => {
+          setDocumentos(prevDocs => 
+            prevDocs.map(doc => {
+              const now = new Date().toLocaleTimeString();
+              if (doc.estado === 'E') {
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Solicito estructura a Oracle DW9818 para ${doc.documento}: 'E' ➔ 'L'.`, type: 'sys' }, ...l]);
+                return { ...doc, estado: 'L' };
+              }
+              if (doc.estado === 'L') {
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Estructura recibida de DW9818 para ${doc.documento}: 'L' ➔ 'G'. Componentes listos.`, type: 'sys' }, ...l]);
+                return { ...doc, estado: 'G' };
+              }
+              if (doc.estado === 'D') {
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Iniciando descarga de saldos para ${doc.documento}: 'D' ➔ 'P'. Operaciones destructivas bloqueadas.`, type: 'warn' }, ...l]);
+                return { ...doc, estado: 'P', porcentaje: '45.00%' };
+              }
+              if (doc.estado === 'P') {
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Finalizó descarga de saldos para ${doc.documento}: 'P' ➔ 'T'. Porcentaje verificado (100%).`, type: 'success' }, ...l]);
+                return { ...doc, estado: 'T', porcentaje: '100.00%', sidom: '22/08/2026', estadoRepoStock: 'T' };
+              }
+              if (doc.estado === 'Q') {
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Finalizó reversión de saldos (SP PA_COMEX_DescargaSaldos_AnularDescarga) para ${doc.documento}: 'Q' ➔ 'A'.`, type: 'success' }, ...l]);
+                return { ...doc, estado: 'A', porcentaje: '100.00%', estadoRepoStock: 'A' };
+              }
+              return doc;
+            })
+          );
+        }, 7000);
+        return () => clearInterval(interval);
+      }, []);
+
+      React.useEffect(() => {
+        if (docTracker) {
+          const updated = documentos.find(d => d.id === docTracker.id);
+          if (updated) setDocTracker(updated);
+        }
+      }, [documentos]);
+
+      React.useEffect(() => {
+        const handleOutsideClick = () => setOpenMenuId(null);
+        window.addEventListener('click', handleOutsideClick);
+        return () => window.removeEventListener('click', handleOutsideClick);
+      }, []);
+
+      const handleFacturaChange = (e) => {
+        const val = e.target.value;
+        setFiltroFactura(val);
+        if (val.length >= 2) {
+          const sug = MOCK_DOCUMENTOS.filter(d => d.documento.toLowerCase().includes(val.toLowerCase())).map(d => d.documento);
+          setSugerenciasFactura(sug);
+        } else {
+          setSugerenciasFactura([]);
+        }
+      };
+
+      // Handlers de Acciones Bedside
+      const handleSolicitarDescarga = (doc) => {
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estado: 'E' } : d));
+        const now = new Date().toLocaleTimeString();
+        setFifoLogs(l => [{ time: now, msg: `[POST /Solicitudes/Descarga] [Operador: m.garcia] Encoló ${doc.documento} (DESCARGAR). Estado inicial 'E'.`, type: 'warn' }, ...l]);
+        showToast(`Solicitud encolada para ${doc.documento}. El Worker FIFO avanzará la transición gradual de estados.`);
+        setDocTracker({ ...doc, estado: 'E' });
+      };
+
+      const handleConfirmarAnulacion = () => {
+        if (!modalAnular) return;
+        setDocumentos(prev => prev.map(d => d.id === modalAnular.id ? { ...d, estado: 'Q', estadoRepoStock: 'Q' } : d));
+        const now = new Date().toLocaleTimeString();
+        setFifoLogs(l => [{ time: now, msg: `[POST /Acciones/Anular] [Operador: m.garcia] Solicitó anulación de ${modalAnular.documento}. Estado 'Q' registrado en BD (<100ms).`, type: 'warn' }, ...l]);
+        showToast(`Anulación registrada para ${modalAnular.documento} (Estado 'Q'). El Worker revertirá los saldos.`);
+        setDocTracker({ ...modalAnular, estado: 'Q' });
+        setModalAnular(null);
+      };
+
+      const handleProcesarEstructuraGenerada = (doc) => {
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estado: 'D' } : d));
+        const now = new Date().toLocaleTimeString();
+        setFifoLogs(l => [{ time: now, msg: `[POST /Solicitudes/Descarga] Transición 'G' ➔ 'D' para ${doc.documento}. Listo para descarga en FIFO.`, type: 'sys' }, ...l]);
+        showToast(`Documento ${doc.documento} pasado a 'D' (Pendiente Descarga) en la cola FIFO.`);
+        setDocTracker({ ...doc, estado: 'D' });
+      };
+
+      const handleRedescargarAnulada = (doc) => {
+        const nuevoId = documentos.length + 1;
+        const nuevoDoc = {
+          id: nuevoId,
+          documento: `${doc.documento}-NEW`,
+          fecha: new Date().toLocaleDateString('es-AR'),
+          estado: 'E',
+          porcentaje: '0.00%',
+          sidom: '—',
+          modelo: doc.modelo,
+          informadoAVG: 'N',
+          tieneSaldosCO: false,
+          estadoRepoStock: 'D'
+        };
+        setDocumentos([nuevoDoc, ...documentos]);
+        const now = new Date().toLocaleTimeString();
+        setFifoLogs(l => [{ time: now, msg: `[POST /Acciones/Reprocesar-Anulada] Nuevo expediente ${nuevoDoc.documento} desde anulada. Estado 'E'.`, type: 'info' }, ...l]);
+        showToast(`Nuevo expediente creado (${nuevoDoc.documento}) partiendo de anulada. Estado 'E' encolado.`);
+        setDocTracker(nuevoDoc);
+      };
+
+      const handleReprocesarRepoStock = (doc) => {
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estadoRepoStock: 'D' } : d));
+        showToast(`EstadoRepoStock restablecido a 'D' para ${doc.documento}.`);
+      };
+
+      const handleReprocesar = (doc) => {
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estado: 'D', hasWarningAutorizacion: false } : d));
+        const now = new Date().toLocaleTimeString();
+        setFifoLogs(l => [{ time: now, msg: `[POST /Acciones/Reprocesar] ${doc.documento} devuelto a 'D'. Warning previo anulado (RN-25).`, type: 'warn' }, ...l]);
+        showToast(`Documento ${doc.documento} devuelto a 'D'. Warning previo anulado (RN-25).`);
+        setDocTracker({ ...doc, estado: 'D' });
+      };
+
+      const handleReenviarSidom = (doc) => {
+        showToast(`Se solicitó el reenvío a SIDOM para ${doc.documento}. Flag enviadopreSIM reseteado a NULL.`);
+      };
+
+      const handleReenviarAVG = (doc) => {
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, informadoAVG: 'N' } : d));
+        showToast(`Reenvío a AVG solicitado para ${doc.documento}. Flag informadoAVG reseteado a 'N'.`);
+      };
+
+      const getDocumentosVisibles = () => {
+        let list = documentos;
+        if (tabActiva === 'anuladas') {
+          list = list.filter(d => d.estado === 'A' || d.estado === 'Q');
+        } else if (tabActiva === 'repostock') {
+          list = list.filter(d => d.estadoRepoStock);
+        }
+        if (filtroFactura) {
+          list = list.filter(d => d.documento.toLowerCase().includes(filtroFactura.toLowerCase()));
+        }
+        if (filtroEstado) {
+          list = list.filter(d => d.estado === filtroEstado);
+        }
+        return list;
+      };
+
+      const docsVisibles = getDocumentosVisibles();
+
+      return (
+        <div className="min-h-screen flex flex-col justify-between">
+          <div>
+            <header className="bg-white border-b border-slate-200 shadow-sm sticky top-0 z-40">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <LogoComexSvg />
+                </div>
+                <div className="flex items-center space-x-3">
+                  <button className="p-2 text-slate-500 hover:text-slate-800 transition-colors relative" title="Notificaciones del sistema">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                    <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-sky-500 rounded-full animate-ping"></span>
+                  </button>
+                  <button className="px-4 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-all">Principal</button>
+                  <button className="px-4 py-1.5 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-900 rounded-md transition-all">Salir</button>
+                </div>
+              </div>
+            </header>
+
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-2">
+              <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-200 pb-4 gap-4">
+                <div className="flex items-center space-x-3">
+                  <span className="p-2.5 bg-blue-900 text-white rounded-lg shadow-sm">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                  </span>
+                  <div>
+                    <h1 className="text-xl font-bold text-slate-900 tracking-tight">ADMINISTRACION DE DESCARGAS</h1>
+                    <p className="text-xs text-slate-500">Módulo de gestión de saldos y afectación RAF (Modelo A Demanda — Api.RAF v2.4)</p>
+                  </div>
+                </div>
+
+                <div className="flex space-x-1 bg-slate-200 p-1 rounded-lg text-xs font-semibold self-start md:self-auto">
+                  <button 
+                    onClick={() => { setTabActiva('principal'); setVistaSaldosCO(null); }} 
+                    className={`px-3 py-1.5 rounded-md transition-all ${tabActiva === 'principal' ? 'bg-white text-blue-950 shadow-sm font-bold' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Grilla Principal
+                  </button>
+                  <button 
+                    onClick={() => { setTabActiva('anuladas'); setVistaSaldosCO(null); }} 
+                    className={`px-3 py-1.5 rounded-md transition-all ${tabActiva === 'anuladas' ? 'bg-white text-blue-950 shadow-sm font-bold' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Anuladas ({documentos.filter(d => d.estado === 'A' || d.estado === 'Q').length})
+                  </button>
+                  <button 
+                    onClick={() => { setTabActiva('repostock'); setVistaSaldosCO(null); }} 
+                    className={`px-3 py-1.5 rounded-md transition-all ${tabActiva === 'repostock' ? 'bg-white text-blue-950 shadow-sm font-bold' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    RepoStock
+                  </button>
+                  <button 
+                    onClick={() => { setTabActiva('monitor'); setVistaSaldosCO(null); }} 
+                    className={`px-3 py-1.5 rounded-md transition-all ${tabActiva === 'monitor' ? 'bg-white text-blue-950 shadow-sm font-bold' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    ⚡ Worker FIFO (A Demanda)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 space-y-4">
+              {toastMessage && (
+                <div className="bg-slate-900 text-white text-xs px-4 py-3 rounded-lg shadow-lg flex items-center justify-between border-l-4 border-emerald-500">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-emerald-400 font-bold">✓ Api.RAF:</span>
+                    <span>{toastMessage}</span>
+                  </div>
+                  <button onClick={() => setToastMessage(null)} className="text-slate-400 hover:text-white font-bold ml-4">✕</button>
+                </div>
+              )}
+
+              {docTracker && (
+                <ComponentePipelineTracker doc={docTracker} onClose={() => setDocTracker(null)} />
+              )}
+
+              {/* Vista CO Garantizados */}
+              {vistaSaldosCO ? (
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+                  <div className="flex items-center justify-between border-b pb-4">
+                    <div>
+                      <h2 className="text-base font-bold text-slate-900">Detalle de Saldos CO Garantizados — {vistaSaldosCO.documento}</h2>
+                      <p className="text-xs text-slate-500">Consulta de Certificados de Origen y Declaraciones DIR vinculadas (vwCOGarantizados)</p>
+                    </div>
+                    <button onClick={() => setVistaSaldosCO(null)} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-semibold rounded-md transition-all">← Volver a la Grilla</button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="border rounded-lg p-4 bg-slate-50 space-y-2">
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">1. CO Garantizados por Plano</h3>
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-200 text-slate-700 font-semibold">
+                          <tr><th className="p-2">Plano</th><th className="p-2">Cantidad</th><th className="p-2">Precio</th><th className="p-2">Saldo CO</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          <tr className="hover:bg-blue-50 cursor-pointer">
+                            <td className="p-2 font-mono font-bold text-blue-900">PL-882190</td><td className="p-2">1,200</td><td className="p-2">USD 45.00</td><td className="p-2 font-bold text-emerald-700">850</td>
+                          </tr>
+                          <tr className="hover:bg-blue-50 cursor-pointer">
+                            <td className="p-2 font-mono font-bold text-blue-900">PL-990122</td><td className="p-2">800</td><td className="p-2">USD 120.50</td><td className="p-2 font-bold text-emerald-700">400</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="border rounded-lg p-4 bg-slate-50 space-y-2">
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">2. Declaraciones DIR Vinculadas (Plano PL-882190)</h3>
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-200 text-slate-700 font-semibold">
+                          <tr><th className="p-2">Fecha</th><th className="p-2">Declaración DIR</th><th className="p-2">Item</th><th className="p-2">Saldo Afectado</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          <tr><td className="p-2">10/08/2026</td><td className="p-2 font-mono">DIR-2026-009912</td><td className="p-2">1</td><td className="p-2 font-mono text-slate-800">450 u.</td></tr>
+                          <tr><td className="p-2">12/08/2026</td><td className="p-2 font-mono">DIR-2026-009988</td><td className="p-2">2</td><td className="p-2 font-mono text-slate-800">400 u.</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ) : tabActiva === 'monitor' ? (
+                /* VISTA: Worker FIFO Monitor */
+                <div className="space-y-4">
+                  <div className="bg-slate-900 text-white rounded-xl p-6 shadow-md space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                      <div className="flex items-center space-x-3">
+                        <span className="w-3 h-3 bg-emerald-400 rounded-full animate-ping"></span>
+                        <div>
+                          <h2 className="text-base font-bold tracking-wide text-white">MONITOR DE COLA FIFO — MODELO A DEMANDA (Api.RAF)</h2>
+                          <p className="text-xs text-slate-400">System.Threading.Channels (Procesa solicitudes explícitas del operador en segundo plano)</p>
+                        </div>
+                      </div>
+                      <div className="flex space-x-2 text-xs">
+                        <span className="bg-slate-800 border border-slate-700 px-3 py-1 rounded text-slate-300">Concurrencia: <strong className="text-emerald-400 font-mono">1 Hilo (Secuencial)</strong></span>
+                        <span className="bg-slate-800 border border-slate-700 px-3 py-1 rounded text-slate-300">Modo: <strong className="text-amber-400">A Demanda</strong></span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+                      <div className="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                        <div className="text-slate-400">Solicitudes en Transición</div>
+                        <div className="text-2xl font-bold font-mono text-amber-400">
+                          {documentos.filter(d => ['E','L','G','D','P','Q'].includes(d.estado)).length}
+                        </div>
+                      </div>
+                      <div className="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                        <div className="text-slate-400">Descargas Completadas ('T')</div>
+                        <div className="text-2xl font-bold font-mono text-emerald-400">
+                          {documentos.filter(d => d.estado === 'T').length}
+                        </div>
+                      </div>
+                      <div className="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                        <div className="text-slate-400">Anulaciones Completadas ('A')</div>
+                        <div className="text-2xl font-bold font-mono text-rose-400">
+                          {documentos.filter(d => d.estado === 'A').length}
+                        </div>
+                      </div>
+                      <div className="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                        <div className="text-slate-400">Tiempo Promedio / Etapa</div>
+                        <div className="text-2xl font-bold font-mono text-sky-400">1.25s</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider flex justify-between">
+                        <span>Terminal Log Stream (Segundo Plano)</span>
+                        <button onClick={() => setFifoLogs([])} className="text-slate-500 hover:text-white">Limpiar Logs</button>
+                      </div>
+                      <div className="bg-black/90 rounded-lg p-4 font-mono text-[11px] h-60 overflow-y-auto space-y-1 border border-slate-800">
+                        {fifoLogs.length === 0 ? (
+                          <div className="text-slate-600 italic">Esperando eventos encolados por usuarios...</div>
+                        ) : (
+                          fifoLogs.map((log, idx) => (
+                            <div key={idx} className="flex space-x-2">
+                              <span className="text-slate-500">[{log.time}]</span>
+                              <span className={
+                                log.type === 'warn' ? 'text-amber-400' :
+                                log.type === 'success' ? 'text-emerald-400 font-semibold' :
+                                log.type === 'sys' ? 'text-sky-400' : 'text-slate-300'
+                              }>
+                                {log.msg}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* VISTAS: Principal, Anuladas, RepoStock */
+                <>
+                  {tabActiva === 'anuladas' && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-xs text-rose-900 flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-sm">Panel de Descargas Anuladas</h3>
+                        <p className="text-rose-700 mt-0.5">Muestra documentos en estado <strong>Anulado ('A')</strong> o <strong>Anulación en Curso ('Q')</strong>. Utilice 'Redescargar' para re-crear un nuevo expediente (RN-08).</p>
+                      </div>
+                      <span className="text-2xl">🚫</span>
+                    </div>
+                  )}
+
+                  {tabActiva === 'repostock' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900 flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-sm">Gestión de Reposición de Stock</h3>
+                        <p className="text-blue-700 mt-0.5">Control de saldos de insumos asociados. Permite restablecer el flag <strong>EstadoRepoStock</strong> a 'D' (Pendiente) para reintentar reposiciones.</p>
+                      </div>
+                      <span className="text-2xl">📦</span>
+                    </div>
+                  )}
+
+                  {/* Card de Filtros */}
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex items-center justify-between cursor-pointer select-none" onClick={() => setFiltrosVisibles(!filtrosVisibles)}>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-slate-600 font-bold text-xs uppercase tracking-wider">Filtros de Búsqueda</span>
+                      </div>
+                      <span className="text-slate-400 text-xs font-bold">{filtrosVisibles ? '▲ Ocultar' : '▼ Expandir'}</span>
+                    </div>
+
+                    {filtrosVisibles && (
+                      <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Tipo Documento</label>
+                          <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                            <option value="V">TODOS / Vacio</option>
+                            <option value="L">Mercado Local (L)</option>
+                            <option value="E">Exportación (E)</option>
+                            <option value="P">Post Embarques (P)</option>
+                          </select>
+                        </div>
+
+                        <div className="relative">
+                          <label className="block font-semibold text-slate-700 mb-1">Número Factura / Documento</label>
+                          <input type="text" value={filtroFactura} onChange={handleFacturaChange} placeholder="Ej: E-0132-00012861" className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono" />
+                          {sugerenciasFactura.length > 0 && (
+                            <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-300 rounded-md shadow-lg z-50 max-h-40 overflow-y-auto">
+                              {sugerenciasFactura.map((sug, i) => (
+                                <div key={i} onClick={() => { setFiltroFactura(sug); setSugerenciasFactura([]); }} className="p-2 hover:bg-blue-50 cursor-pointer font-mono text-slate-800">{sug}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Estado Descarga</label>
+                          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                            <option value="">TODOS</option>
+                            {Object.entries(CATALOGO_ESTADOS).map(([code, obj]) => (
+                              <option key={code} value={code}>{code} - {obj.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Fecha Desde</label>
+                          <input type="date" className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none" defaultValue="2026-08-01" />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">Fecha Hasta</label>
+                          <input type="date" className="w-full p-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none" defaultValue="2026-08-31" />
+                        </div>
+
+                        <div className="flex items-end justify-end">
+                          <button className="px-6 py-2 bg-blue-900 hover:bg-blue-950 text-white font-bold rounded-md shadow-sm transition-all flex items-center space-x-2">
+                            <span>🔍</span>
+                            <span>Buscar</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-visible">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left border-collapse">
+                        <thead className="bg-slate-50 text-slate-700 uppercase font-bold tracking-wider border-b border-slate-200">
+                          <tr>
+                            <th className="p-3.5">Documento</th>
+                            <th className="p-3.5">Fecha</th>
+                            <th className="p-3.5">Estado</th>
+                            {tabActiva === 'repostock' && <th className="p-3.5">Estado RepoStock</th>}
+                            <th className="p-3.5">% Descarga</th>
+                            <th className="p-3.5">F. SIDOM</th>
+                            <th className="p-3.5">Modelo / Producto</th>
+                            <th className="p-3.5 text-center">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {docsVisibles.length === 0 ? (
+                            <tr>
+                              <td colSpan={tabActiva === 'repostock' ? 8 : 7} className="p-8 text-center text-slate-500 italic">
+                                No se encontraron registros para los filtros aplicados.
+                              </td>
+                            </tr>
+                          ) : (
+                            docsVisibles.map((doc) => {
+                              const statusObj = CATALOGO_ESTADOS[doc.estado] || CATALOGO_ESTADOS['V'];
+                              const repoStockObj = CATALOGO_REPOSTOCK[doc.estadoRepoStock] || CATALOGO_REPOSTOCK['D'];
+                              const isTransient = ['Q','P','E','L'].includes(doc.estado);
+                              const isMenuOpen = openMenuId === doc.id;
+
+                              return (
+                                <tr 
+                                  key={doc.id} 
+                                  className={`hover:bg-slate-50 transition-all ${isMenuOpen ? 'relative z-30 bg-blue-50/20' : 'relative z-1'}`}
+                                >
+                                  {/* Documento */}
+                                  <td className="p-3.5 font-mono text-slate-900">
+                                    <div className="flex items-center space-x-1.5">
+                                      <span className="font-bold">{doc.documento}</span>
+                                      <button 
+                                        onClick={() => setDocTracker(doc)}
+                                        title="Ver Pipeline y Estado en Cola FIFO"
+                                        className="text-[10px] px-1.5 py-0.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-mono rounded"
+                                      >
+                                        ⚡ Pipeline
+                                      </button>
+                                    </div>
+                                    {doc.documentoAduanero && (
+                                      <span className="block text-[10px] text-teal-700 font-mono mt-0.5">
+                                        Aduana: {doc.documentoAduanero}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  <td className="p-3.5 text-slate-600 whitespace-nowrap">{doc.fecha}</td>
+
+                                  {/* Estado Badge + Tooltip Nativo */}
+                                  <td className="p-3.5 whitespace-nowrap">
+                                    <div className="inline-flex items-center space-x-1.5">
+                                      <span
+                                        title={statusObj.tooltip}
+                                        onClick={() => setDocTracker(doc)}
+                                        className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded text-[11px] font-medium border ${statusObj.color} cursor-pointer transition-all select-none`}
+                                      >
+                                        {isTransient && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping mr-1"></span>}
+                                        <span>{statusObj.name}</span>
+                                      </span>
+
+                                      {/* RN-25: Warning Badge */}
+                                      {doc.hasWarningAutorizacion && (
+                                        <span 
+                                          title="Descarga por debajo del mínimo esperado (87%) — Requiere autorización vía wsWarning (RN-25)"
+                                          className="text-amber-500 cursor-help text-sm animate-bounce"
+                                        >
+                                          ⚠️
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {tabActiva === 'repostock' && (
+                                    <td className="p-3.5 whitespace-nowrap">
+                                      <span
+                                        title={repoStockObj.tooltip}
+                                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${repoStockObj.color} cursor-help`}
+                                      >
+                                        {repoStockObj.name}
+                                      </span>
+                                    </td>
+                                  )}
+
+                                  <td className="p-3.5 font-mono text-slate-800 whitespace-nowrap">
+                                    <div className="flex items-center space-x-2">
+                                      <div className="w-16 bg-slate-200 h-2 rounded-full overflow-hidden">
+                                        <div className="bg-emerald-500 h-full" style={{ width: doc.porcentaje }}></div>
+                                      </div>
+                                      <span className="text-[11px]">{doc.porcentaje}</span>
+                                    </div>
+                                  </td>
+
+                                  <td className="p-3.5 text-slate-600 font-mono whitespace-nowrap">{doc.sidom}</td>
+                                  <td className="p-3.5 text-slate-700 font-medium">{doc.modelo}</td>
+
+                                  {/* Dropdown Acciones */}
+                                  <td className="p-3.5 text-center whitespace-nowrap relative">
+                                    <div className="inline-block text-left" onClick={(e) => e.stopPropagation()}>
+                                      <button
+                                        onClick={() => setOpenMenuId(isMenuOpen ? null : doc.id)}
+                                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 font-bold text-xs rounded-md shadow-sm transition-all flex items-center space-x-1"
+                                      >
+                                        <span>Seleccionar</span>
+                                        <span className="text-[10px]">▼</span>
+                                      </button>
+
+                                      {isMenuOpen && (
+                                        <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg shadow-xl border border-slate-200 py-1.5 z-50 text-left divide-y divide-slate-100">
+                                          
+                                          <div className="py-1">
+                                            <button onClick={() => { setModalParametrizaciones(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 flex items-center space-x-2">
+                                              <span>🔍</span><span>Ver Parametrizaciones</span>
+                                            </button>
+                                            <button onClick={() => { setModalEstructuras(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 flex items-center space-x-2">
+                                              <span>📋</span><span>Ver Estructuras</span>
+                                            </button>
+                                            <button onClick={() => { setDocTracker(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-50 flex items-center space-x-2 font-semibold">
+                                              <span>⚡</span><span>Ver Pipeline FIFO</span>
+                                            </button>
+                                          </div>
+
+                                          <div className="py-1">
+                                            {tabActiva === 'anuladas' && doc.estado === 'A' && (
+                                              <button onClick={() => { handleRedescargarAnulada(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-emerald-700 font-bold hover:bg-emerald-50 flex items-center space-x-2">
+                                                <span>➕</span><span>Redescargar (Crear Nueva)</span>
+                                              </button>
+                                            )}
+
+                                            {tabActiva === 'repostock' && doc.estadoRepoStock !== 'T' && (
+                                              <button onClick={() => { handleReprocesarRepoStock(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-blue-700 font-bold hover:bg-blue-50 flex items-center space-x-2">
+                                                <span>🔄</span><span>Reprocesar RepoStock (D)</span>
+                                              </button>
+                                            )}
+
+                                            {tabActiva === 'principal' && (
+                                              <>
+                                                {doc.estado === 'V' && (
+                                                  <button onClick={() => { handleSolicitarDescarga(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-emerald-700 font-bold hover:bg-emerald-50 flex items-center space-x-2">
+                                                    <span>▶</span><span>Solicitar Descarga</span>
+                                                  </button>
+                                                )}
+
+                                                {doc.estado === 'G' && (
+                                                  <button onClick={() => { handleProcesarEstructuraGenerada(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-indigo-700 font-bold hover:bg-indigo-50 flex items-center space-x-2">
+                                                    <span>▶</span><span>Procesar (G → D)</span>
+                                                  </button>
+                                                )}
+
+                                                {(doc.estado === 'E' || doc.estado === 'L') && (
+                                                  <button onClick={() => { setModalReemplazar(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-blue-700 font-bold hover:bg-blue-50 flex items-center space-x-2">
+                                                    <span>📤</span><span>Reemplazar Estructura</span>
+                                                  </button>
+                                                )}
+
+                                                {doc.estado === 'T' && (
+                                                  <>
+                                                    <button onClick={() => { handleReprocesar(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-amber-800 font-semibold hover:bg-amber-50 flex items-center space-x-2">
+                                                      <span>🔄</span><span>Reprocesar</span>
+                                                    </button>
+                                                    <button onClick={() => { handleReenviarSidom(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 flex items-center space-x-2">
+                                                      <span>↩</span><span>Reenviar SIDOM</span>
+                                                    </button>
+                                                  </>
+                                                )}
+
+                                                {doc.informadoAVG === 'S' && (
+                                                  <button onClick={() => { handleReenviarAVG(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-50 flex items-center space-x-2">
+                                                    <span>↪</span><span>Reenvío AVG (H-02)</span>
+                                                  </button>
+                                                )}
+
+                                                {doc.tieneSaldosCO && (
+                                                  <button onClick={() => { setVistaSaldosCO(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-teal-700 font-semibold hover:bg-teal-50 flex items-center space-x-2">
+                                                    <span>📊</span><span>Saldos CO (vwCOG)</span>
+                                                  </button>
+                                                )}
+                                              </>
+                                            )}
+                                          </div>
+
+                                          <div className="py-1">
+                                            {(doc.estado === 'D' || doc.estado === 'G' || doc.estado === 'T') && !doc.documentoAduanero && (
+                                              <button onClick={() => { setModalAnular(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-rose-700 font-bold hover:bg-rose-50 flex items-center space-x-2">
+                                                <span>✗</span><span>Anular Descarga</span>
+                                              </button>
+                                            )}
+
+                                            {(doc.estado === 'Q' || doc.estado === 'P') && (
+                                              <div className="px-3 py-1.5 text-[11px] text-amber-700 font-semibold italic bg-amber-50">
+                                                🔒 Proceso en curso (Worker FIFO)
+                                              </div>
+                                            )}
+                                          </div>
+
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
+                      <div>Mostrando <span className="font-bold">1 - {docsVisibles.length}</span> de <span className="font-bold">{docsVisibles.length}</span> registros</div>
+                      <div className="flex items-center space-x-2">
+                        <button className="px-3 py-1 bg-white border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50" disabled>‹ Anterior</button>
+                        <span className="px-3 py-1 bg-emerald-100 text-emerald-800 font-bold rounded">Página 1 de 1</span>
+                        <button className="px-3 py-1 bg-white border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50" disabled>Siguiente ›</button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </main>
+          </div>
+
+          {modalAnular && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+                <div className="flex items-center space-x-3 text-rose-600">
+                  <span className="text-2xl">⚠️</span>
+                  <h3 className="text-base font-bold text-slate-900">Confirmar Anulación</h3>
+                </div>
+                <p className="text-xs text-slate-600">
+                  ¿Está seguro de anular la descarga para el documento <strong className="font-mono text-slate-900">{modalAnular.documento}</strong>?
+                </p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-900 space-y-1">
+                  <div className="font-bold">Procesamiento A Demanda (Api.RAF):</div>
+                  <p>Se registrará el estado <span className="font-bold">'Q'</span> de inmediato (&lt;100ms) y la reversión contable se ejecutará de forma asincrónica en el Worker FIFO.</p>
+                </div>
+                <div className="flex justify-end space-x-2 pt-2">
+                  <button onClick={() => setModalAnular(null)} className="px-4 py-2 bg-slate-200 text-slate-700 text-xs font-semibold rounded-md hover:bg-slate-300">Cancelar</button>
+                  <button onClick={handleConfirmarAnulacion} className="px-4 py-2 bg-rose-600 text-white text-xs font-bold rounded-md hover:bg-rose-700 shadow-sm">Confirmar Anulación</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {modalParametrizaciones && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 space-y-4">
+                <div className="flex justify-between items-center border-b pb-3">
+                  <h3 className="text-sm font-bold text-slate-900">Parametrizaciones — {modalParametrizaciones.documento}</h3>
+                  <button onClick={() => setModalParametrizaciones(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+                <div className="text-xs space-y-2">
+                  <p className="text-slate-600">Relación Insumo / Modelo de Conjuntos Cuenta Trabajo:</p>
+                  <table className="w-full text-left border">
+                    <thead className="bg-slate-100 font-semibold text-slate-700">
+                      <tr><th className="p-2 border">Insumo / Producto</th><th className="p-2 border">Modelo Producto</th><th className="p-2 border">% Insumo</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td className="p-2 border font-mono">INS-7721-A</td><td className="p-2 border font-mono">0001962710</td><td className="p-2 border">100.00%</td></tr>
+                      <tr><td className="p-2 border font-mono">INS-9901-B</td><td className="p-2 border font-mono">0001962888</td><td className="p-2 border">85.50%</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button onClick={() => setModalParametrizaciones(null)} className="px-4 py-1.5 bg-slate-800 text-white text-xs font-semibold rounded-md">Cerrar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {modalEstructuras && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 space-y-4">
+                <div className="flex justify-between items-center border-b pb-3">
+                  <h3 className="text-sm font-bold text-slate-900">Detalle de Estructura — {modalEstructuras.documento}</h3>
+                  <button onClick={() => setModalEstructuras(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+                <div className="text-xs space-y-3">
+                  <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-lg border">
+                    <input type="text" placeholder="Filtrar por Plano..." className="p-1.5 border rounded text-xs w-48 font-mono" />
+                    <button onClick={() => showToast('Archivo Excel descargado exitosamente.')} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded shadow-sm">
+                      📥 Exportar a Excel
+                    </button>
+                  </div>
+                  <table className="w-full text-left border">
+                    <thead className="bg-slate-100 font-semibold text-slate-700">
+                      <tr><th className="p-2 border">Plano</th><th className="p-2 border">Cód. Producto</th><th className="p-2 border">Cantidad</th><th className="p-2 border">Precio</th></tr>
+                    </thead>
+                    <tbody className="divide-y font-mono">
+                      <tr><td className="p-2 border">PL-882190</td><td className="p-2 border">PRD-00192</td><td className="p-2 border">1,500</td><td className="p-2 border">USD 12.50</td></tr>
+                      <tr><td className="p-2 border">PL-990122</td><td className="p-2 border">PRD-00441</td><td className="p-2 border">800</td><td className="p-2 border">USD 45.00</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button onClick={() => setModalEstructuras(null)} className="px-4 py-1.5 bg-slate-800 text-white text-xs font-semibold rounded-md">Cerrar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {modalReemplazar && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+                <div className="flex justify-between items-center border-b pb-3">
+                  <h3 className="text-sm font-bold text-slate-900">Reemplazar Estructura (Excel)</h3>
+                  <button onClick={() => setModalReemplazar(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Cargue el archivo Excel (.xlsx) con el nuevo detalle para <strong className="font-mono">{modalReemplazar.documento}</strong>.
+                </p>
+                <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center bg-slate-50 hover:bg-slate-100 cursor-pointer transition-all">
+                  <span className="text-3xl block mb-2">📊</span>
+                  <span className="text-xs text-slate-600 font-semibold">Arrastre el archivo Excel o haga clic aquí</span>
+                  <span className="block text-[10px] text-slate-400 mt-1">Soporta formatos .XLSX / .XLS</span>
+                </div>
+                <div className="text-[11px] text-slate-500 bg-blue-50 p-2.5 rounded border border-blue-200">
+                  <strong>Rama A ('E'):</strong> Inserta detalle y transiciona a 'G'.<br/>
+                  <strong>Rama B ('L'):</strong> Reemplazo transaccional DELETE+INSERT.
+                </div>
+                <div className="flex justify-end space-x-2 pt-2">
+                  <button onClick={() => setModalReemplazar(null)} className="px-4 py-1.5 bg-slate-200 text-slate-700 text-xs font-semibold rounded-md">Cancelar</button>
+                  <button onClick={() => { setModalReemplazar(null); showToast(`Estructura reemplazada para ${modalReemplazar.documento}.`); }} className="px-4 py-1.5 bg-blue-900 text-white text-xs font-bold rounded-md hover:bg-blue-950">Subir y Procesar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Footer Corporativo STELLANTIS */}
+          <footer className="bg-[#182848] text-white py-4 mt-auto border-t border-slate-800">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between text-xs space-y-2 md:space-y-0">
+              <div className="flex items-center space-x-4">
+                <LogoStellantisSvg />
+                <span className="text-slate-400">|</span>
+                <span className="text-slate-300 font-medium">COMEX — Sistema de Registro de Afectación de Factura</span>
+              </div>
+              <div className="flex items-center space-x-4 text-slate-300">
+                <span>Servidor: <strong className="text-emerald-400 font-mono">PreProducción</strong></span>
+                <span>•</span>
+                <span>Api.RAF v2.4</span>
+              </div>
+            </div>
+          </footer>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+
+  </script>
+</body>
+</html>
