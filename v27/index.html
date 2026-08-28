@@ -42,7 +42,9 @@
       'T': { name: 'Terminada', color: 'bg-emerald-100 text-emerald-800 border-emerald-300', tooltip: 'Descarga completada. Acciones disponibles: Reprocesar, Reenviar SIDOM, Reenvío AVG (si corresponde) y consultar estructuras.' },
       'Q': { name: 'PendienteAnulacion', color: 'bg-amber-100 text-amber-900 border-amber-400 animate-pulse', tooltip: 'Anulación en curso: se están revirtiendo los saldos. Al terminar pasará a Anulada; las demás acciones están bloqueadas.' },
       'A': { name: 'Anulada', color: 'bg-rose-100 text-rose-800 border-rose-300', tooltip: 'Anulada y saldos revertidos. Puede generar una nueva descarga desde la pantalla de Descargas Anuladas.' },
-      'O': { name: 'Oficializada', color: 'bg-purple-100 text-purple-800 border-purple-300', tooltip: 'Documento oficializado: información cerrada, sin acciones de modificación.' }
+      'O': { name: 'Oficializada', color: 'bg-purple-100 text-purple-800 border-purple-300', tooltip: 'Documento oficializado: información cerrada, sin acciones de modificación.' },
+      'S': { name: 'Verificada', color: 'bg-green-100 text-green-800 border-green-300', tooltip: 'Verificada correctamente durante la actualización de saldos.' },
+      'F': { name: 'FallaDeVerificacion', color: 'bg-red-100 text-red-800 border-red-300', tooltip: 'Falló la verificación: revise el detalle antes de reintentar.' }
     };
 
     const CATALOGO_REPOSTOCK = {
@@ -97,6 +99,8 @@
       };
 
       const currentIdx = getStepIndex(doc.estado);
+      // RN-26: un documento 'E' en espera declarativa manual está PAUSADO (⏸️), no activo
+      const isPausado = !isAnulacion && doc.modoManual && doc.estado === 'E';
 
       return (
         <div className="bg-slate-900 text-white p-5 rounded-xl border border-slate-700 shadow-xl space-y-4">
@@ -111,7 +115,9 @@
           </div>
 
           <p className="text-xs text-slate-300">
-            {isAnulacion ? 'Secuencia de Reversión Asincrónica (Anulación):' : 'Seguimiento de la Descarga en Segundo Plano (G ➔ D Automático):'}
+            {isPausado
+              ? '⏸️ Espera declarativa de estructura manual (RN-26): el Worker NO avanzará hasta que cargue el Excel o presione Continuar.'
+              : isAnulacion ? 'Secuencia de Reversión Asincrónica (Anulación):' : 'Seguimiento de la Descarga en Segundo Plano (G ➔ D Automático):'}
           </p>
 
           <div className="grid grid-cols-2 md:grid-cols-6 gap-2 pt-2">
@@ -124,7 +130,9 @@
                   key={step.code}
                   className={`p-3 rounded-lg border text-center transition-all ${
                     isCurrent 
-                      ? 'bg-blue-900/80 border-sky-400 text-white shadow-lg shadow-sky-500/20 ring-2 ring-sky-400/50' 
+                      ? (isPausado
+                        ? 'bg-amber-900/80 border-amber-400 text-white shadow-lg shadow-amber-500/20 ring-2 ring-amber-400/50'
+                        : 'bg-blue-900/80 border-sky-400 text-white shadow-lg shadow-sky-500/20 ring-2 ring-sky-400/50')
                       : isPassed 
                       ? 'bg-emerald-950/60 border-emerald-600/80 text-emerald-200' 
                       : 'bg-slate-800/50 border-slate-700 text-slate-500'
@@ -134,7 +142,8 @@
                     <span className="font-mono text-xs font-bold px-1.5 py-0.5 rounded bg-black/40">
                       {step.code}
                     </span>
-                    {isCurrent && <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>}
+                    {isCurrent && !isPausado && <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>}
+                    {isCurrent && isPausado && <span className="text-[10px]" title="En pausa declarativa (RN-26)">⏸️</span>}
                     {isPassed && <span className="text-emerald-400 font-bold">✓</span>}
                   </div>
                   <div className="font-bold text-[11px] truncate">{step.name}</div>
@@ -146,7 +155,11 @@
 
           <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 font-mono">
             <span>Estado Actual en BD: <strong className="text-amber-400">'{doc.estado}'</strong></span>
-            <span>Transición G ➔ D: <strong className="text-emerald-400">Automatizada (RF-21)</strong></span>
+            <span>
+              {isPausado
+                ? <>Modo: <strong className="text-amber-400">Manual ⏸️ (RN-26)</strong></>
+                : <>Transición G ➔ D: <strong className="text-emerald-400">Automatizada (RF-21)</strong></>}
+            </span>
             <span>Canal: <strong className="text-emerald-400">System.Threading.Channels</strong></span>
           </div>
         </div>
@@ -163,6 +176,8 @@
 
       // Modales
       const [modalAnular, setModalAnular] = React.useState(null);
+      const [modalSolicitar, setModalSolicitar] = React.useState(null);
+      const [modoSeleccionado, setModoSeleccionado] = React.useState('auto');
       const [modalParametrizaciones, setModalParametrizaciones] = React.useState(null);
       const [modalEstructuras, setModalEstructuras] = React.useState(null);
       const [modalReemplazar, setModalReemplazar] = React.useState(null);
@@ -218,16 +233,18 @@
                 return { ...doc, estado: 'P', porcentaje: '45.00%' };
               }
               
-              // 5. P -> T (Finaliza descarga de saldos y verifica %)
+              // 5. P -> T (Finaliza descarga de saldos y verifica %). F. SIDOM NO se setea aquí
+              // (no-cambio §5.3.3): la fecha la completará la interface SIDOM después
               if (doc.estado === 'P') {
                 setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Finalizó descarga de saldos para ${doc.documento}: 'P' ➔ 'T'. Porcentaje verificado (100%).`, type: 'success' }, ...l]);
-                return { ...doc, estado: 'T', porcentaje: '100.00%', sidom: '22/08/2026', estadoRepoStock: 'T' };
+                return { ...doc, estado: 'T', porcentaje: '100.00%', estadoRepoStock: 'T' };
               }
-              
-              // Anulación: Q -> A (SP Reversión de saldos)
+
+              // Anulación: Q -> A (SP Reversión de saldos). El EstadoRepoStock NO se toca aquí:
+              // si quedó 'Q' (RN-06), lo consume el proceso de insumos programado que permanece (§10.4)
               if (doc.estado === 'Q') {
-                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Finalizó reversión de saldos (SP PA_COMEX_DescargaSaldos_AnularDescarga) para ${doc.documento}: 'Q' ➔ 'A'.`, type: 'success' }, ...l]);
-                return { ...doc, estado: 'A', porcentaje: '100.00%', estadoRepoStock: 'A' };
+                setFifoLogs(l => [{ time: now, msg: `[Worker FIFO] Finalizó reversión de saldos (SP PA_COMEX_DescargaSaldos_AnularDescarga) para ${doc.documento}: 'Q' ➔ 'A'. RepoStock 'Q' queda para el proceso de insumos programado.`, type: 'success' }, ...l]);
+                return { ...doc, estado: 'A', porcentaje: '100.00%' };
               }
               return doc;
             })
@@ -260,13 +277,19 @@
         }
       };
 
-      // Handlers de Acciones Bedside
-      const handleSolicitarDescarga = (doc) => {
-        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estado: 'E', modoManual: false } : d));
+      // Handlers de Acciones Bedside — Solicitud con modo auto|manual (RN-26)
+      const handleSolicitarDescarga = (doc, modo) => {
+        const manual = modo === 'manual';
+        setDocumentos(prev => prev.map(d => d.id === doc.id ? { ...d, estado: 'E', modoManual: manual } : d));
         const now = new Date().toLocaleTimeString();
-        setFifoLogs(l => [{ time: now, msg: `[POST /Solicitudes/Descarga] [Operador: m.garcia] Encoló ${doc.documento} (DESCARGAR modo auto). Procesamiento automático E➔L➔G➔D➔P➔T en marcha.`, type: 'warn' }, ...l]);
-        showToast(`Solicitud encolada para ${doc.documento}. El sistema completará todo el proceso automáticamente.`);
-        setDocTracker({ ...doc, estado: 'E' });
+        if (manual) {
+          setFifoLogs(l => [{ time: now, msg: `[POST /Solicitudes/Descarga] [Operador: m.garcia] Registró ${doc.documento} (DESCARGAR modo MANUAL). Documento en 'E' ⏸️ espera declarativa — NO se solicitará estructura a Oracle hasta Excel/Continuar (RN-26).`, type: 'warn' }, ...l]);
+          showToast(`Solicitud MANUAL registrada para ${doc.documento}. Quedó en 'E' ⏸️ esperando su estructura — usted tiene el control (RN-26).`);
+        } else {
+          setFifoLogs(l => [{ time: now, msg: `[POST /Solicitudes/Descarga] [Operador: m.garcia] Encoló ${doc.documento} (DESCARGAR modo auto). Procesamiento automático E➔L➔G➔D➔P➔T en marcha.`, type: 'warn' }, ...l]);
+          showToast(`Solicitud encolada para ${doc.documento} (modo auto). El sistema completará todo el proceso automáticamente.`);
+        }
+        setDocTracker({ ...doc, estado: 'E', modoManual: manual });
       };
 
       // RN-26 / Endpoint #19: POST /descargas/{id}/continuar
@@ -280,11 +303,13 @@
 
       const handleConfirmarAnulacion = () => {
         if (!modalAnular) return;
-        setDocumentos(prev => prev.map(d => d.id === modalAnular.id ? { ...d, estado: 'Q', estadoRepoStock: 'Q' } : d));
+        // RN-06: si EstadoRepoStock era T/Q → forzar 'Q' (lo toma el proceso de insumos asincrónico); resto → 'A' directa
+        const repoFinal = (modalAnular.estadoRepoStock === 'T' || modalAnular.estadoRepoStock === 'Q') ? 'Q' : 'A';
+        setDocumentos(prev => prev.map(d => d.id === modalAnular.id ? { ...d, estado: 'Q', estadoRepoStock: repoFinal } : d));
         const now = new Date().toLocaleTimeString();
-        setFifoLogs(l => [{ time: now, msg: `[POST /Acciones/Anular] [Operador: m.garcia] Solicitó anulación de ${modalAnular.documento}. Estado 'Q' registrado en BD (<100ms).`, type: 'warn' }, ...l]);
+        setFifoLogs(l => [{ time: now, msg: `[POST /Acciones/Anular] [Operador: m.garcia] Solicitó anulación de ${modalAnular.documento}. Estado 'Q' registrado en BD (<100ms). EstadoRepoStock '${modalAnular.estadoRepoStock}' → '${repoFinal}' (RN-06).`, type: 'warn' }, ...l]);
         showToast(`Anulación registrada para ${modalAnular.documento} (Estado 'Q'). El Worker revertirá los saldos.`);
-        setDocTracker({ ...modalAnular, estado: 'Q' });
+        setDocTracker({ ...modalAnular, estado: 'Q', estadoRepoStock: repoFinal });
         setModalAnular(null);
       };
 
@@ -778,17 +803,26 @@
                                               </button>
                                             )}
 
-                                            {tabActiva === 'repostock' && doc.estadoRepoStock !== 'T' && (
+                                            {tabActiva === 'repostock' && doc.estadoRepoStock !== 'T' && doc.estadoRepoStock !== 'Q' && (
                                               <button onClick={() => { handleReprocesarRepoStock(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-blue-700 font-bold hover:bg-blue-50 flex items-center space-x-2">
                                                 <span>🔄</span><span>Reprocesar RepoStock (D)</span>
                                               </button>
                                             )}
 
+                                            {tabActiva === 'repostock' && (doc.estadoRepoStock === 'T' || doc.estadoRepoStock === 'Q') && (
+                                              <div
+                                                title="Debe Primero anular la Descarga (RN-18)"
+                                                className="px-3 py-1.5 text-[11px] text-slate-500 italic bg-slate-50 cursor-not-allowed flex items-center space-x-2"
+                                              >
+                                                <span>🚫</span><span>Reprocesar RepoStock bloqueado</span>
+                                              </div>
+                                            )}
+
                                             {tabActiva === 'principal' && (
                                               <>
                                                 {doc.estado === 'V' && (
-                                                  <button onClick={() => { handleSolicitarDescarga(doc); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-emerald-700 font-bold hover:bg-emerald-50 flex items-center space-x-2">
-                                                    <span>▶</span><span>Solicitar Descarga</span>
+                                                  <button onClick={() => { setModalSolicitar(doc); setModoSeleccionado('auto'); setOpenMenuId(null); }} className="w-full px-3 py-1.5 text-xs text-emerald-700 font-bold hover:bg-emerald-50 flex items-center space-x-2">
+                                                    <span>▶</span><span>Solicitar Descarga…</span>
                                                   </button>
                                                 )}
 
@@ -838,7 +872,17 @@
                                               </button>
                                             )}
 
-                                            {(doc.estado === 'Q' || doc.estado === 'P' || doc.estado === 'G') && (
+                                            {(doc.estado === 'Q' || doc.estado === 'P') && (
+                                              <button
+                                                disabled
+                                                title="Proceso en curso (RN-23): el Worker FIFO está trabajando sobre este documento. Las acciones destructivas quedan deshabilitadas hasta el estado final."
+                                                className="w-full px-3 py-1.5 text-xs text-slate-400 bg-slate-50 cursor-not-allowed flex items-center space-x-2"
+                                              >
+                                                <span>✗</span><span>Anular (bloqueado)</span>
+                                              </button>
+                                            )}
+
+                                            {(doc.estado === 'Q' || doc.estado === 'P') && (
                                               <div className="px-3 py-1.5 text-[11px] text-amber-700 font-semibold italic bg-amber-50">
                                                 🔒 Procesando automáticamente…
                                               </div>
@@ -870,6 +914,57 @@
               )}
             </main>
           </div>
+
+          {/* Modal Solicitar Descarga — selección de modo auto|manual (RN-26) */}
+          {modalSolicitar && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+                <div className="flex justify-between items-center border-b pb-3">
+                  <h3 className="text-sm font-bold text-slate-900">Solicitar Descarga — <span className="font-mono">{modalSolicitar.documento}</span></h3>
+                  <button onClick={() => setModalSolicitar(null)} className="text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+                <p className="text-xs text-slate-600">Seleccione el modo de procesamiento del pipeline (RN-26):</p>
+
+                <div className="space-y-2">
+                  <label
+                    onClick={() => setModoSeleccionado('auto')}
+                    className={`block p-3 rounded-lg border cursor-pointer transition-all ${modoSeleccionado === 'auto' ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-slate-300'}`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <input type="radio" checked={modoSeleccionado === 'auto'} onChange={() => setModoSeleccionado('auto')} className="accent-emerald-600" />
+                      <span className="text-xs font-bold text-slate-900">⚡ Automático (recomendado)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1 pl-6">
+                      El Worker ejecuta E ➔ L ➔ G ➔ D ➔ P ➔ T de inmediato, sin latencia artificial.
+                    </p>
+                  </label>
+
+                  <label
+                    onClick={() => setModoSeleccionado('manual')}
+                    className={`block p-3 rounded-lg border cursor-pointer transition-all ${modoSeleccionado === 'manual' ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-200' : 'border-slate-200 hover:border-slate-300'}`}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <input type="radio" checked={modoSeleccionado === 'manual'} onChange={() => setModoSeleccionado('manual')} className="accent-amber-600" />
+                      <span className="text-xs font-bold text-slate-900">⏸️ Manual — esperaré para cargar la estructura yo mismo</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1 pl-6">
+                      El documento queda en 'E' en espera declarativa: el sistema NO pedirá nada a Oracle DW9818. Avanza cuando cargue el Excel de estructura (Rama A) o presione Continuar (#19).
+                    </p>
+                  </label>
+                </div>
+
+                <div className="flex justify-end space-x-2 pt-2">
+                  <button onClick={() => setModalSolicitar(null)} className="px-4 py-2 bg-slate-200 text-slate-700 text-xs font-semibold rounded-md hover:bg-slate-300">Cancelar</button>
+                  <button
+                    onClick={() => { handleSolicitarDescarga(modalSolicitar, modoSeleccionado); setModalSolicitar(null); }}
+                    className={`px-4 py-2 text-white text-xs font-bold rounded-md shadow-sm ${modoSeleccionado === 'manual' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                  >
+                    {modoSeleccionado === 'manual' ? 'Registrar Espera Manual' : 'Encolar Solicitud'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {modalAnular && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
